@@ -11,7 +11,7 @@
 import { describe, expect, it } from "vitest";
 
 import { sha256 } from "@noble/hashes/sha2.js";
-import { canonicalJson, encodeFrame, makeOffer, offerId } from "../src/index.js";
+import { canonicalJson, decodeFrame, encodeFrame, makeOffer, offerId } from "../src/index.js";
 
 const PAYER = "did:key:z6Mk" + "a".repeat(44);
 const NOW = 1_760_000_000_000;
@@ -104,5 +104,49 @@ describe("canonical JSON escape forms (SPEC §3)", () => {
     // …and not over the pre-escape string, which is what makes the forms above normative.
     const rawDigest = sha256(new TextEncoder().encode(`FLOP::tclk::v1|offer|${canonicalJson(fields)}`));
     expect("0x" + [...rawDigest].map((b) => b.toString(16).padStart(2, "0")).join("")).not.toBe(id);
+  });
+
+  // Every escape class in one frame, frozen to a single wire line and one offer id, so a
+  // cross-language port can diff against one constant as well as the per-class assertions
+  // above. Composite vector contributed by @Aphelios01-sdk on #68, at @sv's request in #67.
+  it("pins every escape class at once against one frozen line and id", () => {
+    const jobId =
+      "a\nb\tc\"d\\e/f" + String.fromCharCode(0x07) + "g" +
+      String.fromCharCode(0xe9) + "h" + String.fromCodePoint(0x1f600);
+    const complexOffer = makeOffer({
+      from: PAYER,
+      role: "payer",
+      amount: "1",
+      asset: "FLOP",
+      lock: "hash",
+      rails: ["flop-htlc"],
+      claimByMs: 1_760_003_600_000,
+      refundAfterMs: 1_760_007_200_000,
+      expiresMs: 1_760_000_600_000,
+      job: { proto: "a2a", id: jobId },
+      nonce: "9f2c81d04c9e1f7a",
+    });
+
+    const expectedId = "0x6d256c211f927c2c23a874d35f4b5372de66b4642274ed8a8b62b73ca5bf6a58";
+    const expectedLine =
+      'tclk1 {"amount":"1","asset":"FLOP","claimByMs":1760003600000,"expiresMs":1760000600000,' +
+      '"from":"did:key:z6Mkaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",' +
+      `"id":"${expectedId}",` +
+      '"job":{"id":"a\\nb\\tc\\"d\\\\e/f\\u0007g\\u00e9h\\ud83d\\ude00","proto":"a2a"},' +
+      '"lock":"hash","nonce":"9f2c81d04c9e1f7a","rails":["flop-htlc"],"refundAfterMs":1760007200000,' +
+      '"role":"payer","type":"offer"}';
+
+    expect(complexOffer.id).toBe(expectedId);
+    expect(encodeFrame(complexOffer)).toBe(expectedLine);
+    expect(decodeFrame(expectedLine).id).toBe(expectedId);
+
+    // A cross-language port has no encoder of ours to agree with, so the frozen id is also
+    // recomputed through the file's independent escaper, the way the previous test does. Now
+    // the constant rests on the escape rule rather than on our encoder alone.
+    const escape = (json: string) =>
+      json.replace(/[^\x20-\x7e]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`);
+    const { id: _id, ...fields } = complexOffer;
+    const digest = sha256(new TextEncoder().encode(`FLOP::tclk::v1|offer|${escape(canonicalJson(fields))}`));
+    expect("0x" + [...digest].map((b) => b.toString(16).padStart(2, "0")).join("")).toBe(expectedId);
   });
 });

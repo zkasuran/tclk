@@ -22,8 +22,10 @@ All notable changes to this project are documented here. Format follows
   hashes the escaped string, so each of these was an unwritten choice that changes every `id`,
   and a port picking differently had its frames rejected with `offer id mismatch` (#48).
   `tests/canonical-escapes.test.ts` pins each form against a hand-written expected string, and
-  checks the id against an independently written escaper. Documentation and tests only: no
-  behaviour, wire byte or golden vector changed.
+  checks the id against an independently written escaper. It also carries one composite vector
+  that exercises every escape class in a single frame, frozen to a full canonical line and offer
+  id, so a cross-language port can diff against one constant (contributed by @Aphelios01-sdk).
+  Documentation and tests only: no behaviour, wire byte or golden vector changed.
 - A schema-owned tclk/1 frame field contract, canonical settlement-rail registry and
   intersection-based, order-independent rail matching helpers. Generated decoder fields
   and the normative `SPEC.md` table are checked for drift in CI.

@@ -131,6 +131,10 @@ escaping stops at U+001F and the non-ASCII rule starts at U+0080 — so it would
 raw, which §2's ASCII-only requirement forbids: technocore sweeps it to a space before storing,
 leaving a stored line that is not the line the sender signed.
 
+`tests/canonical-escapes.test.ts` pins each of these forms on its own and once more all together
+in one composite vector frozen to a full canonical line and offer id, which is the constant a
+port in another language checks itself against.
+
 Common field shapes:
 
 | shape | rule |
