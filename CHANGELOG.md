@@ -6,6 +6,16 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- `probeRoomCreation()` helper to check venue capacity before attempting a deal. When a venue
+  is at its room limit (global cap or per-client daily budget), `tclk-offers` cannot be created
+  and no deal can bootstrap. The probe attempts to create an ephemeral test room and reports
+  whether creation is available or refused. `examples/live-deal.mjs` now probes up front and
+  provides clear guidance when capacity is exhausted, addressing the bootstrap half of #3.
+- SPEC.md §2 now documents the bootstrap dependency on room creation as a known sharp edge,
+  including the two capacity mechanisms venues typically enforce and mitigation guidance.
+
 ### Fixed
 
 - `tclk_post_frame` now accepts exact decimal-string nonces in addition to safe integer
