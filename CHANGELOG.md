@@ -18,6 +18,12 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- `foldTranscript` now emits warnings when transcript metadata anomalies (sequence gaps,
+  ordering violations, backwards timestamps) or deadline-sensitive transitions rely on
+  unsigned venue timestamps. Detects the exact attack from #96: tampered `timestampMs`
+  fields that flip claimed→refunded outcomes while all signatures remain valid. Anomaly
+  checks run only on signed records; unsigned records are skipped to avoid false positives
+  when partial transcripts are analyzed.
 - `tclk_post_frame` now accepts exact decimal-string nonces in addition to safe integer
   numbers, so signed Technocore nonces above JavaScript's safe-integer range are preserved
   without precision loss. Unsafe numeric nonces (> 2^53 - 1) are rejected at the MCP schema

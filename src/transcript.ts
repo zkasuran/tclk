@@ -239,41 +239,43 @@ export function foldTranscript(records: readonly TranscriptRecord[]): Transcript
   const warnings: string[] = [];
   let state: ContractState | null = null;
 
-  // Detect sequence and timestamp anomalies
-  let prevSeq: number | null = null;
-  let prevTimestampMs: number | null = null;
-  let hasDeadlineSensitiveFrame = false;
+  // Detect sequence and timestamp anomalies per room, only on signed records
+  const roomState = new Map<string, { prevSeq: number; prevTimestampMs: number; seenGap: boolean; seenOrderViolation: boolean; seenBackwards: boolean }>();
+  let hasSuccessfulDeadlineFrame = false;
 
+  // First pass: check for anomalies on signed records only
   for (let i = 0; i < records.length; i++) {
     const record = records[i];
+    const isSigned = record?.signature !== null && record?.nonce !== null;
+
+    // Only check anomalies on signed records
+    if (!isSigned) continue;
+
+    const room = record.room ?? "";
+    let state = roomState.get(room);
+    if (!state) {
+      state = { prevSeq: record.seq, prevTimestampMs: record.timestampMs, seenGap: false, seenOrderViolation: false, seenBackwards: false };
+      roomState.set(room, state);
+      continue;
+    }
+
     if (record?.seq !== undefined && Number.isSafeInteger(record.seq)) {
-      if (prevSeq !== null) {
-        if (record.seq <= prevSeq) {
-          warnings.push(`seq ordering: record ${i} has seq ${record.seq} which is not greater than previous seq ${prevSeq}`);
-        } else if (record.seq !== prevSeq + 1) {
-          warnings.push(`seq gap: record ${i} has seq ${record.seq} but previous was ${prevSeq} (expected ${prevSeq + 1})`);
-        }
+      if (record.seq <= state.prevSeq && !state.seenOrderViolation) {
+        warnings.push(`seq ordering: record ${i} has seq ${record.seq} which is not greater than previous seq ${state.prevSeq}`);
+        state.seenOrderViolation = true;
+      } else if (record.seq !== state.prevSeq + 1 && !state.seenGap) {
+        warnings.push(`seq gap: record ${i} jumps from seq ${state.prevSeq} to ${record.seq} in room ${room}`);
+        state.seenGap = true;
       }
-      prevSeq = record.seq;
+      state.prevSeq = record.seq;
     }
 
     if (record?.timestampMs !== undefined && Number.isSafeInteger(record.timestampMs)) {
-      if (prevTimestampMs !== null && record.timestampMs < prevTimestampMs) {
-        warnings.push(`backwards timestamp: record ${i} has timestampMs ${record.timestampMs} which is earlier than previous ${prevTimestampMs}`);
+      if (record.timestampMs < state.prevTimestampMs && !state.seenBackwards) {
+        warnings.push(`backwards timestamp: record ${i} has timestampMs ${record.timestampMs} which is earlier than previous ${state.prevTimestampMs}`);
+        state.seenBackwards = true;
       }
-      prevTimestampMs = record.timestampMs;
-    }
-
-    const frame = tryDecodeFrame(record?.line ?? "");
-    if (frame !== null && ["accept", "lock", "reveal", "refund"].includes(frame.type)) {
-      hasDeadlineSensitiveFrame = true;
-    }
-  }
-
-  if (hasDeadlineSensitiveFrame && warnings.length === 0) {
-    const hasUnsignedRecord = records.some(r => r?.signature === null || r?.nonce === null);
-    if (hasUnsignedRecord) {
-      warnings.push("unsigned metadata: transcript contains deadline-sensitive frames (accept/lock/reveal/refund) but some records lack signatures; seq and timestampMs are not authenticated and may be forged");
+      state.prevTimestampMs = record.timestampMs;
     }
   }
 
@@ -348,7 +350,18 @@ export function foldTranscript(records: readonly TranscriptRecord[]): Transcript
     const result = applyFrame(state, frame, record.timestampMs);
     state = result.state;
     steps.push({ ...base, type: frame.type, ok: result.ok, reason: result.reason });
+
+    // Track successful deadline-sensitive frames
+    if (result.ok && ["accept", "lock", "reveal", "refund"].includes(frame.type)) {
+      hasSuccessfulDeadlineFrame = true;
+    }
   });
+
+  // Emit generic warning when deadline-sensitive frames succeeded
+  // because timestampMs and seq are venue metadata NOT covered by signatures
+  if (hasSuccessfulDeadlineFrame) {
+    warnings.push("unsigned metadata: transcript contains deadline-sensitive frames (accept/lock/reveal/refund) but some records lack signatures; seq and timestampMs are not authenticated and may be forged");
+  }
 
   return { state, steps, warnings };
 }
