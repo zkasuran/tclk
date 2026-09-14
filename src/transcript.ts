@@ -52,6 +52,7 @@ export interface TranscriptStep {
 export interface TranscriptFoldResult {
   state: ContractState | null;
   steps: TranscriptStep[];
+  warnings: string[];
 }
 
 export interface ContractHandshake {
@@ -235,7 +236,46 @@ export function findContractHandshake(
  */
 export function foldTranscript(records: readonly TranscriptRecord[]): TranscriptFoldResult {
   const steps: TranscriptStep[] = [];
+  const warnings: string[] = [];
   let state: ContractState | null = null;
+
+  // Detect sequence and timestamp anomalies
+  let prevSeq: number | null = null;
+  let prevTimestampMs: number | null = null;
+  let hasDeadlineSensitiveFrame = false;
+
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i];
+    if (record?.seq !== undefined && Number.isSafeInteger(record.seq)) {
+      if (prevSeq !== null) {
+        if (record.seq <= prevSeq) {
+          warnings.push(`seq ordering: record ${i} has seq ${record.seq} which is not greater than previous seq ${prevSeq}`);
+        } else if (record.seq !== prevSeq + 1) {
+          warnings.push(`seq gap: record ${i} has seq ${record.seq} but previous was ${prevSeq} (expected ${prevSeq + 1})`);
+        }
+      }
+      prevSeq = record.seq;
+    }
+
+    if (record?.timestampMs !== undefined && Number.isSafeInteger(record.timestampMs)) {
+      if (prevTimestampMs !== null && record.timestampMs < prevTimestampMs) {
+        warnings.push(`backwards timestamp: record ${i} has timestampMs ${record.timestampMs} which is earlier than previous ${prevTimestampMs}`);
+      }
+      prevTimestampMs = record.timestampMs;
+    }
+
+    const frame = tryDecodeFrame(record?.line ?? "");
+    if (frame !== null && ["accept", "lock", "reveal", "refund"].includes(frame.type)) {
+      hasDeadlineSensitiveFrame = true;
+    }
+  }
+
+  if (hasDeadlineSensitiveFrame && warnings.length === 0) {
+    const hasUnsignedRecord = records.some(r => r?.signature === null || r?.nonce === null);
+    if (hasUnsignedRecord) {
+      warnings.push("unsigned metadata: transcript contains deadline-sensitive frames (accept/lock/reveal/refund) but some records lack signatures; seq and timestampMs are not authenticated and may be forged");
+    }
+  }
 
   records.forEach((record, index) => {
     const base = { index, room: record?.room ?? "", seq: record?.seq ?? -1 };
@@ -310,5 +350,5 @@ export function foldTranscript(records: readonly TranscriptRecord[]): Transcript
     steps.push({ ...base, type: frame.type, ok: result.ok, reason: result.reason });
   });
 
-  return { state, steps };
+  return { state, steps, warnings };
 }
