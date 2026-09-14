@@ -115,7 +115,7 @@ the public manual (`/llms.txt`), and any self-hosted deployment works identicall
     budget when it is not. A caller that probes capacity by creating a test room spends 1 of 20
     daily rooms (5% of the budget) to learn whether the 20 are spendable — it is free only when
     it reports bad news. Three mitigations when creation is refused: run your own instance; wait
-    for the daily reset or idle-room reaping (7 days idle, or 24 hours if still on the first
+    for the daily reset or idle-room reaping (7 days idle, or 12 hours if still on the first
     message); or use an existing owned room with both parties on its allow-list, so the derived
     deal room is never created (zero room cost).
 

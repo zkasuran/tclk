@@ -78,7 +78,7 @@ function reportAndExit(error) {
         "",
         "The per-client-IP daily budget (20 new rooms/day on the hosted venue) is the durable",
         "constraint. It resets at UTC midnight. The global cap is transient and clears as idle",
-        "rooms are reaped (7 days idle, or 24 hours if still on the first message).",
+        "rooms are reaped (7 days idle, or 12 hours if still on the first message).",
         "",
         "Three ways forward:",
         "",
