@@ -26,7 +26,7 @@ import { randomBytes } from "node:crypto";
 import {
   OFFER_ROOM, PaperRail, applyFrame, dealRoom, encodeFrame, findContractHandshake, foldTranscript,
   generateHashLock, lockTerms, makeAccept, makeOffer, openContract, paperNote,
-  parseTranscriptExport, probeRoomCreation, stateNote, stateNoteValue, transcriptRecord,
+  parseTranscriptExport, stateNote, stateNoteValue, transcriptRecord,
 } from "../dist/index.js";
 import { canonicalMessage, nextNonce, signerFromSeed, sweep } from "../mcp/dist/signing.js";
 
@@ -71,16 +71,28 @@ function reportAndExit(error) {
     console.error(
       [
         "",
-        "A deal needs two rooms this venue will not create right now: the public offer room,",
-        "and a deal room named from the contract id. Neither is optional — the offer has to",
-        "rest somewhere strangers look, and the deal room is derived, not chosen.",
+        "A deal needs two rooms this venue will not create right now: the public offer room",
+        "(tclk-offers), and a deal room derived from the contract id (mb-p-tclk-<16 hex>).",
+        "Neither is optional — the offer has to rest somewhere strangers look, and the deal",
+        "room is derived, not chosen.",
         "",
-        "Run it against your own instance instead:",
+        "The per-client-IP daily budget (20 new rooms/day on the hosted venue) is the durable",
+        "constraint. It resets at UTC midnight. The global cap is transient and clears as idle",
+        "rooms are reaped (7 days idle, or 24 hours if still on the first message).",
         "",
-        "  TECHNOCORE_URL=http://localhost:8080 node examples/live-deal.mjs",
+        "Three ways forward:",
         "",
-        "The hosted venue clears on its own: idle rooms are reclaimed after 7 days, and one",
-        "still on its first message after 24 hours.",
+        "1. Run against your own instance instead:",
+        "",
+        "   bash/zsh    TECHNOCORE_URL=http://localhost:8080 node examples/live-deal.mjs",
+        '   PowerShell  $env:TECHNOCORE_URL = "http://localhost:8080"; node examples/live-deal.mjs',
+        "   cmd.exe     set TECHNOCORE_URL=http://localhost:8080 && node examples/live-deal.mjs",
+        "",
+        "2. Wait for the daily budget to reset at UTC midnight, or for idle rooms to clear.",
+        "",
+        "3. Use an existing owned room: put both parties on its allow-list and post the full",
+        "   offer/accept/lock/reveal choreography inside it. The derived deal room is never",
+        "   created, so this costs zero rooms against the daily budget.",
       ].join("\n"),
     );
   }
@@ -249,42 +261,6 @@ if (BASE === DEFAULT_VENUE) {
 }
 log("", `payer    ${payer.did}`);
 log("", `payee    ${payee.did}`);
-console.log();
-
-// Pre-flight check: probe room creation capacity before attempting the deal.
-// Issue #3 documents that when the venue is at capacity (global room cap or per-client
-// daily budget), tclk-offers cannot be created and no deal can bootstrap. Probing up front
-// gives clear guidance instead of a raw 400 mid-choreography.
-log("", "Checking venue capacity...");
-const probe = await probeRoomCreation(BASE, fetch);
-if (!probe.available) {
-  console.error(
-    [
-      "",
-      `✗ Room creation refused: ${probe.reason}`,
-      "",
-      "A deal needs two rooms this venue will not create right now:",
-      "  - tclk-offers (the public rendezvous where strangers meet)",
-      "  - mb-p-tclk-<contract-id> (the derived deal room)",
-      "",
-      "When the venue refuses new room creation, no deal can start.",
-      "",
-      "Run against your own instance instead:",
-      "",
-      "  bash/zsh    TECHNOCORE_URL=http://localhost:8080 node examples/live-deal.mjs",
-      '  PowerShell  $env:TECHNOCORE_URL = "http://localhost:8080"; node examples/live-deal.mjs',
-      "  cmd.exe     set TECHNOCORE_URL=http://localhost:8080 && node examples/live-deal.mjs",
-      "",
-      "The hosted venue clears on its own:",
-      "  - Idle rooms are reclaimed after 7 days",
-      "  - Single-message rooms after 24 hours",
-      "  - Per-client daily budget (20 new rooms/day) resets at UTC midnight",
-      "",
-    ].join("\n"),
-  );
-  process.exit(1);
-}
-log("✓", "Venue accepting new rooms");
 console.log();
 
 // 0 — the job spec goes in a note, and the offer points at it. A frame carries the
