@@ -370,6 +370,84 @@ describe("tclk state machine", () => {
     expect(replay.state).toBe(state);
   });
 
+  it("rejects a second accept from a different agent with 'accept in status accepted'", () => {
+    const offer = baseOffer();
+    const firstLock = generateHashLock();
+    const firstAccept = makeAccept(offer, { from: PAYEE_DID, statement: firstLock.hash });
+
+    // First accept succeeds
+    const firstStep = applyFrame(openContract(offer), firstAccept, T0);
+    expect(firstStep.ok).toBe(true);
+    expect(firstStep.state.status).toBe("accepted");
+    expect(firstStep.state.payeeDid).toBe(PAYEE_DID);
+
+    // Second accept from a different agent with a different statement
+    const secondLock = generateHashLock();
+    const secondAccept = makeAccept(offer, { from: STRANGER_DID, statement: secondLock.hash });
+
+    // Verify the second accept carries a different statement (not a replay)
+    expect(secondAccept.statement).not.toBe(firstAccept.statement);
+    expect(secondAccept.from).not.toBe(firstAccept.from);
+
+    // Second accept is rejected with "accept in status accepted"
+    const secondStep = applyFrame(firstStep.state, secondAccept, T0);
+    expect(secondStep.ok).toBe(false);
+    expect(secondStep.reason).toBe("accept in status accepted");
+    expect(secondStep.state).toBe(firstStep.state); // No state change
+  });
+
+  it("rejects multiple competing accepts, each with distinct statements", () => {
+    const offer = baseOffer();
+    const firstLock = generateHashLock();
+    const firstAccept = makeAccept(offer, { from: PAYEE_DID, statement: firstLock.hash });
+
+    const firstStep = applyFrame(openContract(offer), firstAccept, T0);
+    expect(firstStep.ok).toBe(true);
+
+    // Simulate multiple losing acceptors, each with their own minted secret
+    const losingAcceptors = [STRANGER_DID, "did:key:z6Mk" + "j".repeat(44), "did:key:z6Mk" + "k".repeat(44)];
+
+    for (const losingDid of losingAcceptors) {
+      const losingLock = generateHashLock();
+      const losingAccept = makeAccept(offer, { from: losingDid, statement: losingLock.hash });
+
+      // Each losing accept carries a unique statement
+      expect(losingAccept.statement).not.toBe(firstAccept.statement);
+
+      // Each is rejected with the same error message
+      const losingStep = applyFrame(firstStep.state, losingAccept, T0);
+      expect(losingStep.ok).toBe(false);
+      expect(losingStep.reason).toBe("accept in status accepted");
+      expect(losingStep.state).toBe(firstStep.state);
+    }
+  });
+
+  it("losing acceptor rejection is distinguishable from replay by statement", () => {
+    const offer = baseOffer();
+    const lock = generateHashLock();
+    const accept = makeAccept(offer, { from: PAYEE_DID, statement: lock.hash });
+
+    const step = applyFrame(openContract(offer), accept, T0);
+    expect(step.ok).toBe(true);
+
+    // A replay: same DID, same statement, byte-identical frame
+    const replay = applyFrame(step.state, accept, T0);
+    expect(replay.ok).toBe(false);
+    expect(replay.reason).toBe("accept in status accepted");
+
+    // A losing acceptor: different DID, different statement
+    const losingLock = generateHashLock();
+    const losingAccept = makeAccept(offer, { from: STRANGER_DID, statement: losingLock.hash });
+    expect(losingAccept.statement).not.toBe(accept.statement);
+
+    const losing = applyFrame(step.state, losingAccept, T0);
+    expect(losing.ok).toBe(false);
+    expect(losing.reason).toBe("accept in status accepted");
+
+    // Both get the same rejection reason, but inspection of the frame reveals the difference
+    expect(replay.reason).toBe(losing.reason);
+  });
+
   it("cancel works pre-lock for parties only, and never after lock", () => {
     const { offer, state } = accepted();
     expect(applyFrame(openContract(offer), { type: "cancel", from: PAYER_DID, contract: "0x" + "00".repeat(32) }, T0).state.status).toBe("cancelled");
