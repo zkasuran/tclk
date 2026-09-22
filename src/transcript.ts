@@ -233,7 +233,28 @@ export function findContractHandshake(
  * transitions are rejected without changing state. Deadline guards use that record's
  * venue timestamp.
  */
-export function foldTranscript(records: readonly TranscriptRecord[]): TranscriptFoldResult {
+export interface FoldOptions {
+  /**
+   * Refuse to certify a terminal verdict that turns on unsigned venue time (#96).
+   *
+   * A reveal claims and a refund refunds only by comparing `nowMs` to the offer's
+   * `refundAfterMs`, and `nowMs` here is the record's `timestampMs`. The signature
+   * covers `room|nonce|line` only, so `timestampMs` is venue metadata a file supplier
+   * can rewrite without breaking any signature. Editing it flips claimed and refunded
+   * with every signature still valid. Under this flag the fold declines to advance into
+   * `claimed` or `refunded`, marking the step refused and leaving the state at `locked`,
+   * so a strict reader learns the settled state is not provable from signed bytes and has
+   * to confirm it on the rail. Off by default: the plain fold keeps trusting venue time,
+   * which is what a live reader watching the room in real time already does.
+   */
+  strictDeadlines?: boolean;
+}
+
+export function foldTranscript(
+  records: readonly TranscriptRecord[],
+  options: FoldOptions = {},
+): TranscriptFoldResult {
+  const strictDeadlines = options.strictDeadlines ?? false;
   const steps: TranscriptStep[] = [];
   let state: ContractState | null = null;
 
@@ -306,6 +327,23 @@ export function foldTranscript(records: readonly TranscriptRecord[]): Transcript
     }
 
     const result = applyFrame(state, frame, record.timestampMs);
+
+    if (strictDeadlines && result.ok && (frame.type === "reveal" || frame.type === "refund")) {
+      // The reveal and refund guards both turn on nowMs against refundAfterMs, and nowMs is
+      // the unsigned record.timestampMs. So a verdict of claimed or refunded rests on time a
+      // file supplier can rewrite, which is #96. Decline to advance, mark the step refused and
+      // hold the state at locked, rather than certify a terminal state the signatures do not
+      // cover. The refund window is the only deadline that decides a terminal state, so accept
+      // and lock (gated on expiresMs and refundAfterMs to reach locked at all) are left alone.
+      steps.push({
+        ...base,
+        type: frame.type,
+        ok: false,
+        reason: "terminal verdict rests on unsigned venue timestamp (#96)",
+      });
+      return;
+    }
+
     state = result.state;
     steps.push({ ...base, type: frame.type, ok: result.ok, reason: result.reason });
   });

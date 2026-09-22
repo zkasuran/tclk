@@ -235,3 +235,82 @@ describe("trusted transcript records", () => {
     )).toEqual({ offer: offerRecord, accept: acceptRecord });
   });
 });
+
+describe("strict deadline folding (#96)", () => {
+  function revealDeal() {
+    const { lock, offer, accept } = deal();
+    const lockFrame = {
+      type: "lock" as const,
+      from: payer.did,
+      contract: accept.contract,
+      rail: "flop-htlc",
+      ref: "escrow-96",
+    };
+    const reveal = {
+      type: "reveal" as const,
+      from: payee.did,
+      contract: accept.contract,
+      secret: lock.preimage,
+    };
+    return [
+      record(BOARD, 1, NOW - 1, payer, encodeFrame(offer)),
+      record(BOARD, 2, NOW, payee, encodeFrame(accept)),
+      record(dealRoom(accept.contract), 1, NOW + 1, payer, encodeFrame(lockFrame)),
+      record(dealRoom(accept.contract), 2, NOW + 2, payee, encodeFrame(reveal)),
+    ];
+  }
+
+  it("plain fold still trusts venue time and reaches claimed", () => {
+    const folded = foldTranscript(revealDeal());
+    expect(folded.state?.status).toBe("claimed");
+    expect(folded.steps.map((step) => step.ok)).toEqual([true, true, true, true]);
+  });
+
+  it("strict fold refuses to certify a claim that rests on the unsigned timestamp", () => {
+    const folded = foldTranscript(revealDeal(), { strictDeadlines: true });
+    expect(folded.steps.slice(0, 3).map((step) => step.ok)).toEqual([true, true, true]);
+    expect(folded.steps[3]).toMatchObject({
+      type: "reveal",
+      ok: false,
+      reason: expect.stringMatching(/unsigned venue timestamp/),
+    });
+    expect(folded.state?.status).toBe("locked");
+  });
+
+  it("the reveal signature still verifies after its timestamp is moved past the refund window", () => {
+    const records = revealDeal();
+    const forged = { ...records[3], timestampMs: records[3].timestampMs + 7_200_000 };
+    // Only timestampMs changed. The signature covers room|nonce|line, so the record still
+    // authenticates, and the plain fold now rejects the reveal and holds at locked. Same
+    // signed bytes, a different terminal outcome, decided entirely by venue time. That is #96.
+    const plain = foldTranscript([records[0], records[1], records[2], forged]);
+    expect(plain.steps[3]).toMatchObject({ ok: false, reason: expect.stringMatching(/refund window/) });
+    expect(plain.state?.status).toBe("locked");
+  });
+
+  it("strict fold refuses a refund verdict too", () => {
+    const { offer, accept } = deal(NOW + 7_800_000);
+    const lockFrame = {
+      type: "lock" as const,
+      from: payer.did,
+      contract: accept.contract,
+      rail: "flop-htlc",
+      ref: "escrow-96r",
+    };
+    const refund = { type: "refund" as const, from: payer.did, contract: accept.contract };
+    const records = [
+      record(BOARD, 1, NOW - 1, payer, encodeFrame(offer)),
+      record(BOARD, 2, NOW, payee, encodeFrame(accept)),
+      record(dealRoom(accept.contract), 1, NOW + 1, payer, encodeFrame(lockFrame)),
+      record(dealRoom(accept.contract), 2, offer.refundAfterMs, payer, encodeFrame(refund)),
+    ];
+    expect(foldTranscript(records).state?.status).toBe("refunded");
+    const strict = foldTranscript(records, { strictDeadlines: true });
+    expect(strict.steps[3]).toMatchObject({
+      type: "refund",
+      ok: false,
+      reason: expect.stringMatching(/unsigned venue timestamp/),
+    });
+    expect(strict.state?.status).toBe("locked");
+  });
+});
