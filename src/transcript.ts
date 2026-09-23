@@ -9,7 +9,7 @@ import { ed25519 } from "@noble/curves/ed25519.js";
 import { base58, base64urlnopad } from "@scure/base";
 
 import { decodeFrame, tryDecodeFrame } from "./frames.js";
-import { applyFrame, openContract, type ContractState } from "./machine.js";
+import { applyFrame, openContract, TCLK_TERMINAL_STATUSES, type ContractState } from "./machine.js";
 import { dealRoom, OFFER_ROOM } from "./technocore.js";
 
 const ROOM_NAME = /^[a-z0-9][a-z0-9_-]{0,47}$/;
@@ -49,9 +49,45 @@ export interface TranscriptStep {
   reason?: string;
 }
 
+/**
+ * Trust boundary for `state`, alongside the state itself. A caller reads this, not
+ * `state.status`, to learn how far the folded transcript alone can be trusted.
+ *
+ * - `"coordination-only"`: the transcript state is useful for protocol coordination,
+ *   watching a room or deciding the next frame, and is NOT sufficient on its own for
+ *   settlement, reputation, spend or reward decisions.
+ * - `"rail-required"`: the outcome is terminal and a consumer must confirm it against
+ *   authoritative rail evidence before treating it as settled.
+ */
+export type TerminalEvidence = "coordination-only" | "rail-required";
+
 export interface TranscriptFoldResult {
   state: ContractState | null;
   steps: TranscriptStep[];
+  /**
+   * The trust boundary for `state`, computed by construction from the folded status.
+   *
+   * tclk's fold has no rail-authoritative input. A terminal verdict is decided from the
+   * signed transcript plus the record's unsigned venue timestamp, never from a settlement
+   * confirmation on the rail, so the fold cannot and does not certify settlement. This
+   * field states how far the transcript alone carries.
+   *
+   * - `"coordination-only"` when `state` is null or a non-terminal status (`proposed`,
+   *   `accepted`, `locked`). A consumer may use it to coordinate. A consumer may NOT read
+   *   it as settlement, reputation, spend or reward truth. Note a non-terminal status such
+   *   as `accepted` or `locked` was still reached by gating on unsigned venue time, so a
+   *   clean fold, strict-mode or not, is not proof those deadlines held on trusted time.
+   * - `"rail-required"` when `state` is a terminal status (`claimed`, `refunded`,
+   *   `cancelled`). A consumer must confirm the outcome against the authoritative rail
+   *   before treating it as settled. Terminal state alone never upgrades this value,
+   *   because the fold has no rail-authoritative input to upgrade it with. If tclk later
+   *   gains a rail-authoritative input to the fold, that is where an upgrade would be
+   *   proven, never from `state.status`.
+   *
+   * Load-bearing: a caller must NOT infer settlement trust from `state.status` or from a
+   * clean strict-mode fold. Read this field for the boundary.
+   */
+  terminalEvidence: TerminalEvidence;
 }
 
 export interface ContractHandshake {
@@ -255,6 +291,18 @@ export interface FoldOptions {
   strictDeadlines?: boolean;
 }
 
+/**
+ * Classify the folded `state` into its trust boundary. Fail-closed: the fold has no
+ * rail-authoritative input, so a terminal status rests on the transcript plus unsigned
+ * venue time alone and is always "rail-required"; null or a non-terminal status is
+ * "coordination-only". By construction a terminal state cannot classify as settlement
+ * without a rail-authoritative input that today does not exist.
+ */
+function classifyTerminalEvidence(state: ContractState | null): TerminalEvidence {
+  if (state !== null && TCLK_TERMINAL_STATUSES.has(state.status)) return "rail-required";
+  return "coordination-only";
+}
+
 export function foldTranscript(
   records: readonly TranscriptRecord[],
   options: FoldOptions = {},
@@ -353,5 +401,8 @@ export function foldTranscript(
     steps.push({ ...base, type: frame.type, ok: result.ok, reason: result.reason });
   });
 
-  return { state, steps };
+  // Fail-closed classification. See classifyTerminalEvidence: with no rail-authoritative
+  // input, a terminal status is always "rail-required" and everything else is
+  // "coordination-only", so terminal state alone can never read as settlement-grade.
+  return { state, steps, terminalEvidence: classifyTerminalEvidence(state) };
 }

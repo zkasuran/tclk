@@ -365,4 +365,55 @@ describe("strict deadline folding (#96)", () => {
     // stalls at accepted too. The flag never reaches the accept or lock guards.
     expect(foldTranscript(forged).state?.status).toBe("accepted");
   });
+
+  it("terminal state alone never upgrades evidence: terminal is rail-required, all else coordination-only", () => {
+    // The fold has no rail-authoritative input, so a terminal verdict rests on the signed
+    // transcript plus unsigned venue time. terminalEvidence must report every terminal
+    // status as rail-required, never as anything a consumer could read as settled, and a
+    // non-terminal or empty fold as coordination-only. This is the trust boundary the result
+    // carries alongside state.status, so a caller reads it rather than the status.
+
+    // claimed, reached only through venue time, still classifies rail-required.
+    const claimed = foldTranscript(revealDeal());
+    expect(claimed.state?.status).toBe("claimed");
+    expect(claimed.terminalEvidence).toBe("rail-required");
+
+    // refunded, the other time-driven terminal, is rail-required too.
+    const { offer, accept } = deal(NOW + 7_800_000);
+    const lockFrame = {
+      type: "lock" as const,
+      from: payer.did,
+      contract: accept.contract,
+      rail: "flop-htlc",
+      ref: "escrow-96e",
+    };
+    const refund = { type: "refund" as const, from: payer.did, contract: accept.contract };
+    const refunded = foldTranscript([
+      record(BOARD, 1, NOW - 1, payer, encodeFrame(offer)),
+      record(BOARD, 2, NOW, payee, encodeFrame(accept)),
+      record(dealRoom(accept.contract), 1, NOW + 1, payer, encodeFrame(lockFrame)),
+      record(dealRoom(accept.contract), 2, offer.refundAfterMs, payer, encodeFrame(refund)),
+    ]);
+    expect(refunded.state?.status).toBe("refunded");
+    expect(refunded.terminalEvidence).toBe("rail-required");
+
+    // cancelled is terminal, so rail-required, even though it never turned on a deadline.
+    const cancel = { type: "cancel" as const, from: payee.did, contract: accept.contract };
+    const cancelled = foldTranscript([
+      record(BOARD, 1, NOW - 1, payer, encodeFrame(offer)),
+      record(BOARD, 2, NOW, payee, encodeFrame(accept)),
+      record(dealRoom(accept.contract), 1, NOW + 1, payee, encodeFrame(cancel)),
+    ]);
+    expect(cancelled.state?.status).toBe("cancelled");
+    expect(cancelled.terminalEvidence).toBe("rail-required");
+
+    // A clean strict fold that safely holds at locked is non-terminal, so coordination-only.
+    // The clean strict fold is not settlement evidence, which is the boundary that matters.
+    const heldAtLocked = foldTranscript(revealDeal(), { strictDeadlines: true });
+    expect(heldAtLocked.state?.status).toBe("locked");
+    expect(heldAtLocked.terminalEvidence).toBe("coordination-only");
+
+    // An empty fold has no state at all, coordination-only and never rail-required.
+    expect(foldTranscript([]).terminalEvidence).toBe("coordination-only");
+  });
 });
