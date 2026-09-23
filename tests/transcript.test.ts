@@ -313,4 +313,56 @@ describe("strict deadline folding (#96)", () => {
     });
     expect(strict.state?.status).toBe("locked");
   });
+
+  it("does not guard the accept or lock deadlines, which still read unsigned time", () => {
+    // strictDeadlines refuses only the terminal reveal and refund verdicts. accept and lock
+    // also gate on the record's unsigned timestampMs (offer.expiresMs and offer.refundAfterMs
+    // in src/machine.ts), so editing one of those flips the fold before it ever reaches locked
+    // and strict mode stays silent. This pins that remaining trust boundary.
+    const { lock, offer, accept } = deal();
+    const lockFrame = {
+      type: "lock" as const,
+      from: payer.did,
+      contract: accept.contract,
+      rail: "flop-htlc",
+      ref: "escrow-96l",
+    };
+    const reveal = {
+      type: "reveal" as const,
+      from: payee.did,
+      contract: accept.contract,
+      secret: lock.preimage,
+    };
+    const honest = [
+      record(BOARD, 1, NOW - 1, payer, encodeFrame(offer)),
+      record(BOARD, 2, NOW, payee, encodeFrame(accept)),
+      record(dealRoom(accept.contract), 1, NOW + 1, payer, encodeFrame(lockFrame)),
+      record(dealRoom(accept.contract), 2, NOW + 2, payee, encodeFrame(reveal)),
+    ];
+    // With honest timestamps strict mode holds at locked, the PR's safe stop.
+    const honestStrict = foldTranscript(honest, { strictDeadlines: true });
+    expect(honestStrict.state?.status).toBe("locked");
+
+    // Move only the lock's unsigned timestamp to the refund boundary. The signature covers
+    // room|nonce|line, so the record still authenticates.
+    const forged = [...honest];
+    forged[2] = { ...honest[2], timestampMs: offer.refundAfterMs };
+    const strict = foldTranscript(forged, { strictDeadlines: true });
+
+    // The lock is refused by the ordinary machine guard, not the strict #96 guard, so the
+    // fold stalls at accepted. The outcome diverged before locked, driven by unsigned time,
+    // and no step carries the #96 refusal reason.
+    expect(strict.steps[2]).toMatchObject({
+      type: "lock",
+      ok: false,
+      reason: "refund window is already open",
+    });
+    expect(strict.state?.status).toBe("accepted");
+    expect(honestStrict.state?.status).not.toBe(strict.state?.status);
+    expect(strict.steps.some((step) => /unsigned venue timestamp/.test(step.reason ?? ""))).toBe(false);
+
+    // strictDeadlines changed nothing on this path: the plain fold of the same forged records
+    // stalls at accepted too. The flag never reaches the accept or lock guards.
+    expect(foldTranscript(forged).state?.status).toBe("accepted");
+  });
 });

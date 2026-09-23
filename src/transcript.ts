@@ -246,6 +246,11 @@ export interface FoldOptions {
    * so a strict reader learns the settled state is not provable from signed bytes and has
    * to confirm it on the rail. Off by default: the plain fold keeps trusting venue time,
    * which is what a live reader watching the room in real time already does.
+   *
+   * The scope is exactly the reveal and refund verdicts. `accept` and `lock` also gate on
+   * this same unsigned timestamp (`offer.expiresMs` and `offer.refundAfterMs`), so this flag
+   * does not make every deadline-dependent transition strict. A caller must not read a clean
+   * accept or lock step as proof those deadlines held on trusted time.
    */
   strictDeadlines?: boolean;
 }
