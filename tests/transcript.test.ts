@@ -249,4 +249,30 @@ describe("trusted transcript records", () => {
       accept.contract,
     )).toEqual({ offer: offerRecord, accept: acceptRecord });
   });
+
+  it("does not resurrect a losing acceptance when selecting a contract handshake", () => {
+    const { offer, accept } = deal();
+    const competingAccept = makeAccept(offer, {
+      from: stranger.did,
+      statement: generateHashLock().hash,
+      nonce: "1122334455667788",
+    });
+    const offerRecord = record(BOARD, 1, NOW - 1, payer, encodeFrame(offer));
+    const winningRecord = record(BOARD, 2, NOW, payee, encodeFrame(accept));
+    const losingRecord = record(BOARD, 3, NOW + 1, stranger, encodeFrame(competingAccept));
+    const board = [offerRecord, winningRecord, losingRecord];
+
+    expect(board.every((entry) => verifyTranscriptRecord(entry).ok)).toBe(true);
+    const live = foldTranscript(board);
+    expect(live.state?.contract).toBe(accept.contract);
+    expect(live.steps[2]).toMatchObject({ ok: false, reason: "accept in status accepted" });
+    expect(findContractHandshake(board, accept.contract)).toEqual({
+      offer: offerRecord,
+      accept: winningRecord,
+    });
+
+    // The audit example folds only the selected pair. Returning the losing pair
+    // would turn the same board into a second, different accepted contract.
+    expect(findContractHandshake(board, competingAccept.contract)).toBeNull();
+  });
 });

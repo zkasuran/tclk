@@ -237,7 +237,7 @@ function authenticatedFrame(record: TranscriptRecord) {
 
 /**
  * Find one contract's authenticated offer/accept pair without rewriting board history.
- * Only an accept that follows its referenced offer in the supplied append order counts.
+ * Only the first valid accept after its referenced offer in supplied append order counts.
  */
 export function findContractHandshake(
   records: readonly TranscriptRecord[],
@@ -245,19 +245,27 @@ export function findContractHandshake(
 ): ContractHandshake | null {
   // Reuse the public derivation's strict contract-id validation.
   dealRoom(contract);
-  const offers = new Map<string, TranscriptRecord>();
+  const offers = new Map<string, { record: TranscriptRecord; state: ContractState }>();
   let acceptPrecededOffer = false;
 
   for (const record of records) {
     const frame = authenticatedFrame(record);
     if (frame?.type === "offer") {
-      if (!offers.has(frame.id)) offers.set(frame.id, record);
+      if (!offers.has(frame.id)) {
+        offers.set(frame.id, { record, state: openContract(frame) });
+      }
       continue;
     }
-    if (frame?.type !== "accept" || frame.contract !== contract) continue;
+    if (frame?.type !== "accept") continue;
     const offer = offers.get(frame.ref);
-    if (offer !== undefined) return { offer, accept: record };
-    acceptPrecededOffer = true;
+    if (offer === undefined) {
+      if (frame.contract === contract) acceptPrecededOffer = true;
+      continue;
+    }
+    const result = applyFrame(offer.state, frame, record.timestampMs);
+    if (!result.ok) continue;
+    offer.state = result.state;
+    if (frame.contract === contract) return { offer: offer.record, accept: record };
   }
 
   if (acceptPrecededOffer) {
